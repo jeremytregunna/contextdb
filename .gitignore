@@ -1,0 +1,30 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+contextdb
+
+# Output of the coverage, benchmarking, etc.
+*.out
+*.prof
+benchmark-data
+
+# Executables
+./gs
+./storage-bench
+
+# Dependency directories
+vendor/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+.context
+docs/internal
+
+# macOS files
+.DS_Store

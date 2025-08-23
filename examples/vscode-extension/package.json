@@ -1,0 +1,146 @@
+{
+  "name": "contextdb-integration",
+  "displayName": "ContextDB Integration",
+  "description": "Capture development context and classify activities with ContextDB",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["context", "ai", "development", "tracking", "crdt"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "ContextDB",
+      "properties": {
+        "contextdb.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ContextDB context capturing"
+        },
+        "contextdb.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8080/api/v1",
+          "description": "ContextDB server URL"
+        },
+        "contextdb.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "ContextDB API key for authentication"
+        },
+        "contextdb.batchSize": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of operations to batch before sending"
+        },
+        "contextdb.flushInterval": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1000,
+          "maximum": 60000,
+          "description": "Interval in milliseconds to flush operations"
+        },
+        "contextdb.captureTextChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture text document changes"
+        },
+        "contextdb.captureFileOperations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture file create/delete/rename operations"
+        },
+        "contextdb.captureGitEvents": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture git status changes"
+        },
+        "contextdb.captureDebugSessions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture debug session events"
+        },
+        "contextdb.minimumChangeSize": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "Minimum number of characters for a change to be captured"
+        },
+        "contextdb.excludeDirectories": {
+          "type": "array",
+          "default": ["node_modules", ".git", "dist", "build", ".vscode"],
+          "description": "Directories to exclude from capturing"
+        },
+        "contextdb.excludeFileTypes": {
+          "type": "array",
+          "default": [".log", ".tmp", ".cache", ".DS_Store"],
+          "description": "File extensions to exclude from capturing"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "contextdb.enable",
+        "title": "Enable Context Capturing",
+        "category": "ContextDB"
+      },
+      {
+        "command": "contextdb.disable",
+        "title": "Disable Context Capturing",
+        "category": "ContextDB"
+      },
+      {
+        "command": "contextdb.showStats",
+        "title": "Show Session Statistics",
+        "category": "ContextDB"
+      },
+      {
+        "command": "contextdb.analyzeSession",
+        "title": "Analyze Current Session",
+        "category": "ContextDB"
+      },
+      {
+        "command": "contextdb.flushOperations",
+        "title": "Flush Pending Operations",
+        "category": "ContextDB"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "contextdb.analyzeSession",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "contextdb.enable",
+          "when": "!contextdb.enabled"
+        },
+        {
+          "command": "contextdb.disable", 
+          "when": "contextdb.enabled"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "16.x",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "axios": "^1.4.0"
+  }
+}
