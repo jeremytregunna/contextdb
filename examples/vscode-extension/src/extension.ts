@@ -126,21 +126,84 @@ function registerCommands(context: vscode.ExtensionContext) {
 function registerEventHandlers(context: vscode.ExtensionContext) {
     const config = vscode.workspace.getConfiguration('contextdb');
     
-    // Text document changes
+    // Enhanced text document changes with debouncing
     if (config.get('captureTextChanges', true)) {
+        const changeBuffer = new Map<string, any[]>();
+        const debounceTimers = new Map<string, NodeJS.Timeout>();
+        const originalContent = new Map<string, string[]>();
+        
         const textChangeHandler = vscode.workspace.onDidChangeTextDocument(async (event) => {
             if (!isEnabled || !shouldCaptureDocument(event.document)) return;
             
-            for (const change of event.contentChanges) {
-                if (change.text.trim().length < config.get('minimumChangeSize', 3)) continue;
-                
-                const activityType = ActivityClassifier.classifyTextChange(change, event.document);
-                const operation = createTextChangeOperation(change, event.document, activityType);
+            const documentUri = event.document.uri.toString();
+            
+            // Initialize original content tracking
+            if (!originalContent.has(documentUri)) {
+                originalContent.set(documentUri, event.document.getText().split('\n'));
+            }
+            
+            // Accumulate changes
+            if (!changeBuffer.has(documentUri)) {
+                changeBuffer.set(documentUri, []);
+            }
+            changeBuffer.get(documentUri)!.push({
+                document: event.document,
+                changes: event.contentChanges,
+                timestamp: Date.now()
+            });
+            
+            // Clear existing timer
+            const existingTimer = debounceTimers.get(documentUri);
+            if (existingTimer) {
+                clearTimeout(existingTimer);
+            }
+            
+            // Set new debounce timer
+            const timer = setTimeout(async () => {
+                await processAccumulatedChanges(
+                    documentUri,
+                    changeBuffer.get(documentUri) || [],
+                    originalContent
+                );
+                changeBuffer.delete(documentUri);
+                debounceTimers.delete(documentUri);
+            }, 2000); // 2 second debounce
+            
+            debounceTimers.set(documentUri, timer);
+        });
+        
+        // Process accumulated changes with meaningful content detection
+        async function processAccumulatedChanges(
+            documentUri: string,
+            changes: any[],
+            contentTracker: Map<string, string[]>
+        ) {
+            if (changes.length === 0) return;
+            
+            const lastChange = changes[changes.length - 1];
+            const document = lastChange.document;
+            
+            const originalLines = contentTracker.get(documentUri) || [];
+            const currentLines = document.getText().split('\n');
+            
+            // Detect meaningful changes
+            const changeInfo = detectMeaningfulChange(originalLines, currentLines);
+            
+            if (changeInfo) {
+                const operation = createEnhancedTextChangeOperation(
+                    document,
+                    changeInfo,
+                    changes.length
+                );
                 
                 await batcher.addOperation(operation);
                 sessionTracker.trackOperation(operation);
             }
-        });
+            
+            // Update content tracker
+            contentTracker.set(documentUri, [...currentLines]);
+        }
+        
         context.subscriptions.push(textChangeHandler);
     }
     
@@ -254,33 +317,166 @@ function registerDebugHandlers(context: vscode.ExtensionContext) {
 }
 
 // Helper functions for creating operations
-function createTextChangeOperation(
-    change: vscode.TextDocumentContentChangeEvent,
+function detectMeaningfulChange(original: string[], current: string[]) {
+    const linesDeleted = Math.max(0, original.length - current.length);
+    const linesAdded = Math.max(0, current.length - original.length);
+    
+    // Skip if no meaningful change
+    if (linesDeleted === 0 && linesAdded === 0) {
+        // Check for content changes within lines
+        const hasContentChange = original.some((line, i) => line !== (current[i] || ''));
+        if (!hasContentChange) return null;
+    }
+    
+    // Pure deletion
+    if (linesDeleted > 0 && linesAdded === 0) {
+        const deletedLines = findDeletedLines(original, current);
+        return {
+            operationType: 'delete' as const,
+            content: {
+                type: 'delete',
+                deleted: deletedLines.join('\n')
+            },
+            linesDeleted,
+            linesAdded: 0
+        };
+    }
+    
+    // Pure addition
+    if (linesAdded > 0 && linesDeleted === 0) {
+        const addedLines = findAddedLines(original, current);
+        return {
+            operationType: 'insert' as const,
+            content: {
+                type: 'insert',
+                added: addedLines.join('\n')
+            },
+            linesDeleted: 0,
+            linesAdded
+        };
+    }
+    
+    // Mixed changes or replacement
+    const { oldContent, newContent } = findChangedContent(original, current);
+    return {
+        operationType: 'insert' as const,
+        content: {
+            type: 'replace',
+            old: oldContent.join('\n'),
+            new: newContent.join('\n')
+        },
+        linesDeleted,
+        linesAdded
+    };
+}
+
+function findDeletedLines(original: string[], current: string[]): string[] {
+    const deleted: string[] = [];
+    let commonPrefix = 0;
+    
+    // Find common prefix
+    for (let i = 0; i < Math.min(original.length, current.length); i++) {
+        if (original[i] === current[i]) {
+            commonPrefix = i + 1;
+        } else {
+            break;
+        }
+    }
+    
+    // Extract deleted lines
+    const deletedCount = original.length - current.length;
+    for (let i = commonPrefix; i < commonPrefix + deletedCount; i++) {
+        if (original[i]) {
+            deleted.push(original[i]);
+        }
+    }
+    
+    return deleted;
+}
+
+function findAddedLines(original: string[], current: string[]): string[] {
+    const added: string[] = [];
+    let commonPrefix = 0;
+    
+    // Find common prefix
+    for (let i = 0; i < Math.min(original.length, current.length); i++) {
+        if (original[i] === current[i]) {
+            commonPrefix = i + 1;
+        } else {
+            break;
+        }
+    }
+    
+    // Extract added lines
+    const addedCount = current.length - original.length;
+    for (let i = commonPrefix; i < commonPrefix + addedCount; i++) {
+        if (current[i]) {
+            added.push(current[i]);
+        }
+    }
+    
+    return added;
+}
+
+function findChangedContent(original: string[], current: string[]) {
+    // Find first difference
+    let firstDiff = 0;
+    for (let i = 0; i < Math.min(original.length, current.length); i++) {
+        if (original[i] !== current[i]) {
+            firstDiff = i;
+            break;
+        }
+    }
+    
+    // Find last difference
+    let lastDiffOld = original.length - 1;
+    let lastDiffNew = current.length - 1;
+    
+    for (let i = 0; i < Math.min(original.length, current.length); i++) {
+        const oldIdx = original.length - 1 - i;
+        const newIdx = current.length - 1 - i;
+        if (original[oldIdx] !== current[newIdx]) {
+            lastDiffOld = oldIdx;
+            lastDiffNew = newIdx;
+            break;
+        }
+    }
+    
+    return {
+        oldContent: original.slice(firstDiff, lastDiffOld + 1),
+        newContent: current.slice(firstDiff, lastDiffNew + 1)
+    };
+}
+
+function createEnhancedTextChangeOperation(
     document: vscode.TextDocument,
-    activityType: ActivityType
+    changeInfo: any,
+    changeCount: number
 ): Operation {
     const position = {
         segments: [{
-            value: change.rangeOffset + Date.now(),
+            value: Date.now(),
             author: getAuthor()
         }],
-        hash: `${document.fileName}-${change.rangeOffset}-${Date.now()}`
+        hash: `${document.fileName}-${Date.now()}`
     };
     
     return {
-        type: change.text ? 'insert' : 'delete',
+        type: changeInfo.operationType,
         position,
-        content: change.text || `Deleted ${change.rangeLength} characters`,
+        content: JSON.stringify(changeInfo.content),
+        content_type: 'json',
         author: getAuthor(),
         document_id: document.fileName,
         metadata: {
             session_id: sessionTracker.getSessionId(),
             context: {
-                activity_type: activityType,
                 language: document.languageId,
-                line_number: change.range.start.line,
-                character: change.range.start.character,
-                change_length: change.text.length,
+                file_size: document.getText().length.toString(),
+                line_count: document.lineCount.toString(),
+                lines_deleted: changeInfo.linesDeleted.toString(),
+                lines_added: changeInfo.linesAdded.toString(),
+                change_count: changeCount.toString(),
                 workspace: vscode.workspace.name || 'unknown'
             }
         }
@@ -300,23 +496,26 @@ function createFileOperation(
         hash: `file-${operation}-${Date.now()}`
     };
     
-    let content = `File ${operation}: ${filePath}`;
-    if (additional?.old_path) {
-        content += ` (from ${additional.old_path})`;
-    }
+    const content = {
+        type: 'session',
+        event: `file_${operation}`,
+        message: `File ${operation}: ${filePath}${additional?.old_path ? ` (from ${additional.old_path})` : ''}`
+    };
     
     return {
         type: 'insert',
         position,
-        content,
+        content: JSON.stringify(content),
+        content_type: 'json',
         author: getAuthor(),
         document_id: filePath,
         metadata: {
             session_id: sessionTracker.getSessionId(),
             context: {
-                activity_type: `file_${operation}` as ActivityType,
+                operation_type: `file_${operation}`,
                 file_type: getFileExtension(filePath),
-                old_path: additional?.old_path
+                old_path: additional?.old_path || '',
+                workspace: vscode.workspace.name || 'unknown'
             }
         }
     };
@@ -331,19 +530,27 @@ function createFileSaveOperation(document: vscode.TextDocument): Operation {
         hash: `save-${document.fileName}-${Date.now()}`
     };
     
+    const content = {
+        type: 'session',
+        event: 'file_save',
+        message: `Saved: ${document.fileName}`
+    };
+    
     return {
         type: 'insert',
         position,
-        content: `Saved: ${document.fileName}`,
+        content: JSON.stringify(content),
+        content_type: 'json',
         author: getAuthor(),
         document_id: document.fileName,
         metadata: {
             session_id: sessionTracker.getSessionId(),
             context: {
-                activity_type: ActivityType.FILE_SAVE,
+                operation_type: 'file_save',
                 language: document.languageId,
-                file_size: document.getText().length,
-                line_count: document.lineCount
+                file_size: document.getText().length.toString(),
+                line_count: document.lineCount.toString(),
+                workspace: vscode.workspace.name || 'unknown'
             }
         }
     };

@@ -58,9 +58,55 @@ Content-Type: application/json
     "segments": [{"value": 1, "author": "user-123"}],
     "hash": "position-hash"
   },
-  "content": "Hello, world!",
+  "content": "{\"type\": \"insert\", \"added\": \"Hello, world!\"}",
+  "content_type": "json",
   "author": "user-123",
-  "document_id": "main.go"
+  "document_id": "main.go",
+  "metadata": {
+    "session_id": "session-123",
+    "context": {
+      "language": "go",
+      "file_size": "1024",
+      "line_count": "45",
+      "workspace": "my-project"
+    }
+  }
+}
+```
+
+#### Content Types
+
+The `content_type` field indicates how to interpret the `content` field:
+
+- **`text`** - Plain text content (default for backwards compatibility)
+- **`json`** - Structured JSON data containing operation details
+- **`binary`** - Base64-encoded binary content
+
+#### Structured Content Examples
+
+**Text Changes:**
+```json
+{
+  "type": "delete",
+  "content": "{\"type\": \"delete\", \"deleted\": \"old code here\"}",
+  "content_type": "json"
+}
+```
+
+```json
+{
+  "type": "insert", 
+  "content": "{\"type\": \"replace\", \"old\": \"old code\", \"new\": \"new code\"}",
+  "content_type": "json"
+}
+```
+
+**Session Events:**
+```json
+{
+  "type": "insert",
+  "content": "{\"type\": \"session\", \"event\": \"file_save\", \"message\": \"Saved main.go\"}",
+  "content_type": "json"
 }
 ```
 

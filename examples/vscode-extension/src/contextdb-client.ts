@@ -5,6 +5,7 @@ export interface Operation {
     type: 'insert' | 'delete';
     position: Position;
     content: string;
+    content_type?: string;
     author: string;
     document_id: string;
     timestamp?: string;

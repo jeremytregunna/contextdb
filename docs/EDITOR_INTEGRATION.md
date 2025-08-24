@@ -44,29 +44,233 @@ function registerTextDocumentHandlers(
     context: vscode.ExtensionContext, 
     contextDB: ContextDBClient
 ) {
-    // Document changes
+    let changeBuffer: ChangeEvent[] = [];
+    let debounceTimer: NodeJS.Timeout | null = null;
+    const originalContent = new Map<string, string[]>();
+    
+    // Document changes with debouncing and meaningful content detection
     vscode.workspace.onDidChangeTextDocument(async (event) => {
         const document = event.document;
+        const documentUri = document.uri.toString();
         
-        for (const change of event.contentChanges) {
-            await contextDB.createOperation({
-                type: 'insert', // or 'delete' based on change type
-                position: createPositionFromRange(change.range, document),
-                content: change.text,
-                author: getActiveAuthor(),
-                document_id: document.fileName,
-                metadata: {
-                    session_id: getSessionId(),
-                    context: {
-                        language: document.languageId,
-                        change_type: change.text ? 'insertion' : 'deletion',
-                        line_count: document.lineCount,
-                        workspace: vscode.workspace.name
-                    }
-                }
-            });
+        // Initialize original content tracking if not exists
+        if (!originalContent.has(documentUri)) {
+            originalContent.set(documentUri, document.getText().split('\n'));
         }
+        
+        // Accumulate changes
+        changeBuffer.push({
+            document,
+            changes: event.contentChanges,
+            timestamp: Date.now()
+        });
+        
+        // Debounce processing
+        if (debounceTimer) {
+            clearTimeout(debounceTimer);
+        }
+        
+        debounceTimer = setTimeout(async () => {
+            await processAccumulatedChanges(changeBuffer, originalContent);
+            changeBuffer = [];
+            debounceTimer = null;
+        }, 2000); // 2 second debounce
     });
+
+    // Process accumulated changes with meaningful content detection
+    async function processAccumulatedChanges(
+        changes: ChangeEvent[], 
+        contentTracker: Map<string, string[]>
+    ) {
+        if (changes.length === 0) return;
+        
+        const lastChange = changes[changes.length - 1];
+        const document = lastChange.document;
+        const documentUri = document.uri.toString();
+        
+        const originalLines = contentTracker.get(documentUri) || [];
+        const currentLines = document.getText().split('\n');
+        
+        // Detect what actually changed
+        const { operationType, changedContent } = detectMeaningfulChange(originalLines, currentLines);
+        
+        // Update content tracker
+        contentTracker.set(documentUri, [...currentLines]);
+        
+        // Create structured operation
+        await contextDB.createOperation({
+            type: operationType,
+            position: createPositionFromDocument(document),
+            content: JSON.stringify(changedContent),
+            content_type: 'json',
+            author: getActiveAuthor(),
+            document_id: document.fileName,
+            metadata: {
+                session_id: getSessionId(),
+                context: {
+                    language: document.languageId,
+                    file_size: document.getText().length.toString(),
+                    line_count: currentLines.length.toString(),
+                    workspace: vscode.workspace.name || '',
+                    git_branch: await getCurrentGitBranch(),
+                    git_status: await getGitStatus()
+                }
+            }
+        });
+    }
+
+    // Detect meaningful changes between original and current content
+    function detectMeaningfulChange(original: string[], current: string[]) {
+        const linesDeleted = Math.max(0, original.length - current.length);
+        const linesAdded = Math.max(0, current.length - original.length);
+        
+        // Pure deletion
+        if (linesDeleted > 0 && linesAdded === 0) {
+            const deletedContent = findDeletedLines(original, current);
+            return {
+                operationType: 'delete' as const,
+                changedContent: {
+                    type: 'delete',
+                    deleted: deletedContent.join('\n')
+                }
+            };
+        }
+        
+        // Pure addition
+        if (linesAdded > 0 && linesDeleted === 0) {
+            const addedContent = findAddedLines(original, current);
+            return {
+                operationType: 'insert' as const,
+                changedContent: {
+                    type: 'insert',
+                    added: addedContent.join('\n')
+                }
+            };
+        }
+        
+        // Replacement or mixed changes
+        const { oldContent, newContent } = findReplacedContent(original, current);
+        return {
+            operationType: 'insert' as const,
+            changedContent: {
+                type: 'replace',
+                old: oldContent.join('\n'),
+                new: newContent.join('\n')
+            }
+        };
+    }
+
+    // Helper functions for meaningful change detection
+    function findDeletedLines(original: string[], current: string[]): string[] {
+        const deleted: string[] = [];
+        let commonPrefix = 0;
+        
+        // Find common prefix
+        for (let i = 0; i < Math.min(original.length, current.length); i++) {
+            if (original[i] === current[i]) {
+                commonPrefix = i + 1;
+            } else {
+                break;
+            }
+        }
+        
+        // Extract deleted lines  
+        const deletedCount = original.length - current.length;
+        for (let i = commonPrefix; i < commonPrefix + deletedCount; i++) {
+            if (original[i]) {
+                deleted.push(original[i]);
+            }
+        }
+        
+        return deleted;
+    }
+
+    function findAddedLines(original: string[], current: string[]): string[] {
+        const added: string[] = [];
+        let commonPrefix = 0;
+        
+        // Find common prefix
+        for (let i = 0; i < Math.min(original.length, current.length); i++) {
+            if (original[i] === current[i]) {
+                commonPrefix = i + 1;
+            } else {
+                break;
+            }
+        }
+        
+        // Extract added lines
+        const addedCount = current.length - original.length;  
+        for (let i = commonPrefix; i < commonPrefix + addedCount; i++) {
+            if (current[i]) {
+                added.push(current[i]);
+            }
+        }
+        
+        return added;
+    }
+
+    function findReplacedContent(original: string[], current: string[]) {
+        // Find first and last different lines
+        let firstDiff = 0;
+        let lastDiffOld = original.length - 1;
+        let lastDiffNew = current.length - 1;
+        
+        // Find first difference
+        for (let i = 0; i < Math.min(original.length, current.length); i++) {
+            if (original[i] !== current[i]) {
+                firstDiff = i;
+                break;
+            }
+        }
+        
+        // Find last difference from the end
+        for (let i = 0; i < Math.min(original.length, current.length); i++) {
+            const oldIdx = original.length - 1 - i;
+            const newIdx = current.length - 1 - i;  
+            if (original[oldIdx] !== current[newIdx]) {
+                lastDiffOld = oldIdx;
+                lastDiffNew = newIdx;
+                break;
+            }
+        }
+        
+        return {
+            oldContent: original.slice(firstDiff, lastDiffOld + 1),
+            newContent: current.slice(firstDiff, lastDiffNew + 1)
+        };
+    }
+
+    // Git integration helpers
+    async function getCurrentGitBranch(): Promise<string> {
+        try {
+            const gitExtension = vscode.extensions.getExtension('vscode.git');
+            if (gitExtension) {
+                const gitApi = gitExtension.exports.getAPI(1);
+                const repo = gitApi.repositories[0];
+                return repo?.state.HEAD?.name || 'unknown';
+            }
+        } catch (error) {
+            console.warn('Failed to get git branch:', error);
+        }
+        return 'unknown';
+    }
+
+    async function getGitStatus(): Promise<string> {
+        try {
+            const gitExtension = vscode.extensions.getExtension('vscode.git');
+            if (gitExtension) {
+                const gitApi = gitExtension.exports.getAPI(1);
+                const repo = gitApi.repositories[0];
+                const state = repo?.state;
+                if (state) {
+                    return `${state.workingTreeChanges.length + state.indexChanges.length}`;
+                }
+            }
+        } catch (error) {
+            console.warn('Failed to get git status:', error);
+        }
+        return '0';
+    }
 
     // File operations
     vscode.workspace.onDidCreateFiles(async (event) => {
@@ -74,12 +278,21 @@ function registerTextDocumentHandlers(
             await contextDB.createOperation({
                 type: 'insert',
                 position: createFilePosition(file.path),
-                content: `File created: ${file.path}`,
+                content: JSON.stringify({
+                    type: 'session',
+                    event: 'file_create',
+                    message: `File created: ${file.path}`
+                }),
+                content_type: 'json',
                 author: getActiveAuthor(),
                 document_id: file.path,
                 metadata: {
-                    operation_type: 'file_creation',
-                    file_type: getFileType(file.path)
+                    session_id: getSessionId(),
+                    context: {
+                        operation_type: 'file_creation',
+                        file_type: getFileType(file.path),
+                        workspace: vscode.workspace.name || ''
+                    }
                 }
             });
         }
@@ -90,13 +303,22 @@ function registerTextDocumentHandlers(
         await contextDB.createOperation({
             type: 'insert',
             position: createTimestampPosition(),
-            content: `Saved: ${document.fileName}`,
+            content: JSON.stringify({
+                type: 'session',
+                event: 'file_save',
+                message: `Saved: ${document.fileName}`
+            }),
+            content_type: 'json',
             author: getActiveAuthor(),
             document_id: document.fileName,
             metadata: {
-                operation_type: 'file_save',
-                language: document.languageId,
-                size: document.getText().length
+                session_id: getSessionId(),
+                context: {
+                    operation_type: 'file_save',
+                    language: document.languageId,
+                    size: document.getText().length.toString(),
+                    line_count: document.lineCount.toString()
+                }
             }
         });
     });
@@ -668,6 +890,161 @@ class IntentRecognizer {
             files_touched: new Set(operations.map(op => op.document_id)).size
         };
     }
+}
+```
+
+## Structured Content Examples
+
+### Content Type System
+
+ContextDB supports different content types to enable rich analysis and meaningful operation tracking:
+
+```typescript
+// Text content (legacy/simple)
+{
+  content: "Hello, world!",
+  content_type: "text"
+}
+
+// JSON content (structured)
+{
+  content: JSON.stringify({
+    type: "insert",
+    added: "Hello, world!"
+  }),
+  content_type: "json"
+}
+
+// Binary content (base64 encoded)
+{
+  content: "SGVsbG8gV29ybGQ=",
+  content_type: "binary"
+}
+```
+
+### Real-World Content Examples
+
+**Multi-line Deletion:**
+```json
+{
+  "type": "delete",
+  "content": "{\"type\": \"delete\", \"deleted\": \"function oldFunction() {\\n  return 'deprecated';\\n}\"}",
+  "content_type": "json",
+  "metadata": {
+    "context": {
+      "lines_deleted": "3",
+      "lines_added": "0"
+    }
+  }
+}
+```
+
+**Code Replacement:**
+```json
+{
+  "type": "insert", 
+  "content": "{\"type\": \"replace\", \"old\": \"let result = data.map(x => x.id)\", \"new\": \"const result = data.map(({ id }) => id)\"}",
+  "content_type": "json",
+  "metadata": {
+    "context": {
+      "language": "javascript",
+      "change_type": "refactor"
+    }
+  }
+}
+```
+
+**File Operations:**
+```json
+{
+  "type": "insert",
+  "content": "{\"type\": \"session\", \"event\": \"file_save\", \"message\": \"Saved main.ts\"}",
+  "content_type": "json",
+  "metadata": {
+    "context": {
+      "operation_type": "file_save",
+      "file_size": "2048",
+      "line_count": "67"
+    }
+  }
+}
+```
+
+**Debug Session:**
+```json
+{
+  "type": "insert",
+  "content": "{\"type\": \"session\", \"event\": \"debug_start\", \"message\": \"Debug session started: Launch Program\"}",
+  "content_type": "json", 
+  "metadata": {
+    "context": {
+      "operation_type": "debug_start",
+      "debug_type": "node",
+      "configuration": "launch"
+    }
+  }
+}
+```
+
+**Git Operations:**
+```json
+{
+  "type": "insert",
+  "content": "{\"type\": \"session\", \"event\": \"git_commit\", \"message\": \"Commit: feat: add user authentication\", \"commit_hash\": \"abc123\"}",
+  "content_type": "json",
+  "metadata": {
+    "context": {
+      "operation_type": "git_commit",
+      "branch": "feature/auth",
+      "files_changed": "5"
+    }
+  }
+}
+```
+
+### Content Processing
+
+**Client-side Processing:**
+```typescript
+function createStructuredContent(changeType: string, data: any): string {
+  const content = {
+    type: changeType,
+    ...data,
+    timestamp: new Date().toISOString()
+  };
+  
+  return JSON.stringify(content);
+}
+
+// Usage
+const operation: Operation = {
+  type: 'insert',
+  content: createStructuredContent('replace', {
+    old: 'function getName() { return name; }',
+    new: 'const getName = () => name;'
+  }),
+  content_type: 'json'
+};
+```
+
+**Server-side Analysis:**
+```typescript
+// ContextDB can parse structured content for analysis
+function analyzeOperation(operation: Operation) {
+  if (operation.content_type === 'json') {
+    const parsed = JSON.parse(operation.content);
+    
+    switch (parsed.type) {
+      case 'replace':
+        return analyzeReplacement(parsed.old, parsed.new);
+      case 'delete':
+        return analyzeDeletion(parsed.deleted);
+      case 'insert':
+        return analyzeInsertion(parsed.added);
+    }
+  }
+  
+  return analyzeTextContent(operation.content);
 }
 ```
 

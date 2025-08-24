@@ -16,15 +16,16 @@ func NewOperationID(content []byte) OperationID {
 }
 
 type Operation struct {
-	ID        OperationID    `json:"id"`
-	Type      OperationType  `json:"type"`
-	Position  LogootPosition `json:"position"`
-	Content   string         `json:"content"`
-	Length    int            `json:"length,omitempty"`
-	Author    AuthorID       `json:"author"`
-	Timestamp time.Time      `json:"timestamp"`
-	Parents   []OperationID  `json:"parents"`
-	Metadata  OperationMeta  `json:"metadata"`
+	ID          OperationID    `json:"id"`
+	Type        OperationType  `json:"type"`
+	Position    LogootPosition `json:"position"`
+	Content     string         `json:"content"`
+	ContentType string         `json:"content_type,omitempty"`
+	Length      int            `json:"length,omitempty"`
+	Author      AuthorID       `json:"author"`
+	Timestamp   time.Time      `json:"timestamp"`
+	Parents     []OperationID  `json:"parents"`
+	Metadata    OperationMeta  `json:"metadata"`
 }
 
 type OperationType string
@@ -33,6 +34,13 @@ const (
 	OpInsert OperationType = "insert"
 	OpDelete OperationType = "delete"
 	OpMove   OperationType = "move"
+)
+
+// Content type constants
+const (
+	ContentTypeText   = "text"
+	ContentTypeJSON   = "json"
+	ContentTypeBinary = "binary"
 )
 
 type OperationMeta struct {

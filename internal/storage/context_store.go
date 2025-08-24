@@ -160,6 +160,7 @@ func initSQLiteDB(dbPath string) (*sql.DB, error) {
 		type TEXT NOT NULL,
 		position_segments TEXT NOT NULL,
 		content TEXT NOT NULL,
+		content_type TEXT DEFAULT 'text',
 		length INTEGER,
 		author TEXT NOT NULL,
 		timestamp INTEGER NOT NULL,
@@ -225,10 +226,15 @@ func (cs *ContextStore) StoreOperation(op *operations.Operation) error {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
+	contentType := op.ContentType
+	if contentType == "" {
+		contentType = "text" // Default for backwards compatibility
+	}
+
 	query := `
 		INSERT OR REPLACE INTO operations 
-		(id, type, position_segments, content, length, author, timestamp, parents, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = cs.db.Exec(query,
@@ -236,6 +242,7 @@ func (cs *ContextStore) StoreOperation(op *operations.Operation) error {
 		string(op.Type),
 		string(positionJSON),
 		op.Content,
+		contentType,
 		op.Length,
 		string(op.Author),
 		op.Timestamp.Unix(),
@@ -248,7 +255,7 @@ func (cs *ContextStore) StoreOperation(op *operations.Operation) error {
 
 func (cs *ContextStore) GetOperation(id operations.OperationID) (*operations.Operation, error) {
 	query := `
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE id = ?
 	`
 
@@ -269,7 +276,7 @@ func (cs *ContextStore) GetOperations(ids []operations.OperationID) ([]*operatio
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE id IN (%s)
 		ORDER BY timestamp
 	`, strings.Join(placeholders, ","))
@@ -294,7 +301,7 @@ func (cs *ContextStore) GetOperations(ids []operations.OperationID) ([]*operatio
 
 func (cs *ContextStore) GetOperationsSince(timestamp time.Time) ([]*operations.Operation, error) {
 	query := `
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE timestamp >= ?
 		ORDER BY timestamp
 	`
@@ -319,7 +326,7 @@ func (cs *ContextStore) GetOperationsSince(timestamp time.Time) ([]*operations.O
 
 func (cs *ContextStore) GetOperationsByAuthor(authorID operations.AuthorID) ([]*operations.Operation, error) {
 	query := `
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE author = ?
 		ORDER BY timestamp
 	`
@@ -441,6 +448,7 @@ func (cs *ContextStore) GetDocument(filePath string) (*positioning.Document, err
 
 	doc.Constructs = make(map[operations.PositionKey]*positioning.Construct)
 	doc.PositionIndex = make(map[operations.PositionKey]operations.LogootPosition)
+	doc.AppliedOps = make(map[operations.OperationID]bool)
 	doc.PositionIdx = make([]operations.LogootPosition, 0)
 
 	doc.LastOperation = operations.OperationID(lastOpStr)
@@ -556,6 +564,7 @@ func (cs *ContextStore) scanOperation(scanner interface {
 }) (*operations.Operation, error) {
 	var op operations.Operation
 	var idStr, positionJSON, parentsJSON, metadataJSON string
+	var contentType string
 	var timestampUnix int64
 
 	err := scanner.Scan(
@@ -563,6 +572,7 @@ func (cs *ContextStore) scanOperation(scanner interface {
 		&op.Type,
 		&positionJSON,
 		&op.Content,
+		&contentType,
 		&op.Length,
 		&op.Author,
 		&timestampUnix,
@@ -574,6 +584,7 @@ func (cs *ContextStore) scanOperation(scanner interface {
 	}
 
 	op.ID = operations.OperationID(idStr)
+	op.ContentType = contentType
 	op.Timestamp = time.Unix(timestampUnix, 0)
 
 	var segments []operations.PositionSegment

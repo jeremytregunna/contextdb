@@ -50,6 +50,7 @@ type Document struct {
 	Constructs    map[operations.PositionKey]*Construct                `json:"constructs"`
 	PositionIndex map[operations.PositionKey]operations.LogootPosition `json:"position_index"`
 	PositionIdx   []operations.LogootPosition                          `json:"position_idx"`
+	AppliedOps    map[operations.OperationID]bool                      `json:"applied_ops"`
 	ContentHash   [32]byte                                             `json:"content_hash"`
 	Version       uint64                                               `json:"version"`
 	LastOperation operations.OperationID                               `json:"last_operation"`
@@ -61,6 +62,7 @@ func NewDocument(filePath string) *Document {
 		FilePath:      filePath,
 		Constructs:    make(map[operations.PositionKey]*Construct),
 		PositionIndex: make(map[operations.PositionKey]operations.LogootPosition),
+		AppliedOps:    make(map[operations.OperationID]bool),
 		PositionIdx:   make([]operations.LogootPosition, 0),
 		Version:       0,
 	}
@@ -185,10 +187,15 @@ func (doc *Document) ApplyOperation(op *operations.Operation) error {
 }
 
 func (doc *Document) applyInsert(op *operations.Operation) error {
-	posKey := op.Position.Key()
-	if _, exists := doc.Constructs[posKey]; exists {
-		return ErrPositionOccupied
+	// Check for duplicate operations, not duplicate positions
+	if doc.AppliedOps[op.ID] {
+		// Operation already applied, ignore silently (idempotent)
+		return nil
 	}
+
+	posKey := op.Position.Key()
+	// Allow multiple operations at the same position - positions can be reused
+	// If there's an existing construct at this position, we replace it
 
 	constructType := doc.inferConstructType(op.Content, op.Metadata)
 	construct := &Construct{
@@ -204,6 +211,7 @@ func (doc *Document) applyInsert(op *operations.Operation) error {
 	doc.Constructs[posKey] = construct
 	doc.PositionIndex[posKey] = op.Position
 	doc.insertPositionSorted(op.Position)
+	doc.AppliedOps[op.ID] = true // Mark operation as applied
 	doc.LastOperation = op.ID
 	doc.Version++
 	doc.updateContentHash()
@@ -212,15 +220,24 @@ func (doc *Document) applyInsert(op *operations.Operation) error {
 }
 
 func (doc *Document) applyDelete(op *operations.Operation) error {
+	// Check for duplicate operations
+	if doc.AppliedOps[op.ID] {
+		// Operation already applied, ignore silently (idempotent)
+		return nil
+	}
+
 	posKey := op.Position.Key()
 	construct, exists := doc.Constructs[posKey]
 	if !exists {
+		// Nothing to delete, but mark as applied
+		doc.AppliedOps[op.ID] = true
 		return nil
 	}
 
 	delete(doc.Constructs, posKey)
 	delete(doc.PositionIndex, posKey)
 	doc.removePositionFromIndex(op.Position)
+	doc.AppliedOps[op.ID] = true // Mark operation as applied
 	doc.LastOperation = op.ID
 	doc.Version++
 	doc.updateContentHash()

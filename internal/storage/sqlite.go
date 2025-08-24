@@ -37,6 +37,7 @@ func (s *SQLiteStore) initSchema() error {
 		type TEXT NOT NULL,
 		position_segments TEXT NOT NULL,
 		content TEXT NOT NULL,
+		content_type TEXT DEFAULT 'text',
 		length INTEGER,
 		author TEXT NOT NULL,
 		timestamp INTEGER NOT NULL,
@@ -97,15 +98,21 @@ func (s *SQLiteStore) StoreOperation(op *operations.Operation) error {
 
 	query := `
 		INSERT OR REPLACE INTO operations
-		(id, type, position_segments, content, length, author, timestamp, parents, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
+
+	contentType := op.ContentType
+	if contentType == "" {
+		contentType = "text" // Default for backwards compatibility
+	}
 
 	_, err = s.db.Exec(query,
 		string(op.ID),
 		string(op.Type),
 		string(positionJSON),
 		op.Content,
+		contentType,
 		op.Length,
 		string(op.Author),
 		op.Timestamp.Unix(),
@@ -118,7 +125,7 @@ func (s *SQLiteStore) StoreOperation(op *operations.Operation) error {
 
 func (s *SQLiteStore) GetOperation(id operations.OperationID) (*operations.Operation, error) {
 	query := `
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE id = ?
 	`
 
@@ -139,7 +146,7 @@ func (s *SQLiteStore) GetOperations(ids []operations.OperationID) ([]*operations
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE id IN (%s)
 		ORDER BY timestamp
 	`, strings.Join(placeholders, ","))
@@ -164,7 +171,7 @@ func (s *SQLiteStore) GetOperations(ids []operations.OperationID) ([]*operations
 
 func (s *SQLiteStore) GetOperationsSince(timestamp time.Time) ([]*operations.Operation, error) {
 	query := `
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE timestamp >= ?
 		ORDER BY timestamp
 	`
@@ -189,7 +196,7 @@ func (s *SQLiteStore) GetOperationsSince(timestamp time.Time) ([]*operations.Ope
 
 func (s *SQLiteStore) GetOperationsByAuthor(authorID operations.AuthorID) ([]*operations.Operation, error) {
 	query := `
-		SELECT id, type, position_segments, content, length, author, timestamp, parents, metadata
+		SELECT id, type, position_segments, content, content_type, length, author, timestamp, parents, metadata
 		FROM operations WHERE author = ?
 		ORDER BY timestamp
 	`
@@ -310,6 +317,7 @@ func (s *SQLiteStore) GetDocument(filePath string) (*positioning.Document, error
 
 	doc.Constructs = make(map[operations.PositionKey]*positioning.Construct)
 	doc.PositionIndex = make(map[operations.PositionKey]operations.LogootPosition)
+	doc.AppliedOps = make(map[operations.OperationID]bool)
 	doc.PositionIdx = make([]operations.LogootPosition, 0)
 
 	doc.LastOperation = operations.OperationID(lastOpStr)
@@ -417,6 +425,7 @@ func (s *SQLiteStore) scanOperation(scanner interface {
 }) (*operations.Operation, error) {
 	var op operations.Operation
 	var idStr, positionJSON, parentsJSON, metadataJSON string
+	var contentType string
 	var timestampUnix int64
 
 	err := scanner.Scan(
@@ -424,6 +433,7 @@ func (s *SQLiteStore) scanOperation(scanner interface {
 		&op.Type,
 		&positionJSON,
 		&op.Content,
+		&contentType,
 		&op.Length,
 		&op.Author,
 		&timestampUnix,
@@ -435,6 +445,7 @@ func (s *SQLiteStore) scanOperation(scanner interface {
 	}
 
 	op.ID = operations.OperationID(idStr)
+	op.ContentType = contentType
 	op.Timestamp = time.Unix(timestampUnix, 0)
 
 	var segments []operations.PositionSegment

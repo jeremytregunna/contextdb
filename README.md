@@ -15,7 +15,7 @@ A pure operation-based version control system with stable addressing for charact
 
 ```bash
 # Clone and build
-git clone https://github.com/your-org/contextdb.git
+git clone https://github.com/jeremytregunna/contextdb.git
 cd contextdb
 go build -o contextdb ./cmd/contextdb
 

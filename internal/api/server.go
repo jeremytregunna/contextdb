@@ -140,14 +140,15 @@ type SuccessResponse struct {
 // Operation endpoints
 func (s *APIServer) createOperation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Type       operations.OperationType  `json:"type"`
-		Position   operations.LogootPosition `json:"position"`
-		Content    string                    `json:"content"`
-		Length     int                       `json:"length,omitempty"`
-		Author     operations.AuthorID       `json:"author"`
-		Parents    []operations.OperationID  `json:"parents,omitempty"`
-		Metadata   operations.OperationMeta  `json:"metadata,omitempty"`
-		DocumentID string                    `json:"document_id"`
+		Type        operations.OperationType  `json:"type"`
+		Position    operations.LogootPosition `json:"position"`
+		Content     string                    `json:"content"`
+		ContentType string                    `json:"content_type,omitempty"`
+		Length      int                       `json:"length,omitempty"`
+		Author      operations.AuthorID       `json:"author"`
+		Parents     []operations.OperationID  `json:"parents,omitempty"`
+		Metadata    operations.OperationMeta  `json:"metadata,omitempty"`
+		DocumentID  string                    `json:"document_id"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -164,14 +165,15 @@ func (s *APIServer) createOperation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	op := &operations.Operation{
-		Type:      req.Type,
-		Position:  req.Position,
-		Content:   req.Content,
-		Length:    req.Length,
-		Author:    req.Author,
-		Timestamp: time.Now(),
-		Parents:   req.Parents,
-		Metadata:  req.Metadata,
+		Type:        req.Type,
+		Position:    req.Position,
+		Content:     req.Content,
+		ContentType: req.ContentType,
+		Length:      req.Length,
+		Author:      req.Author,
+		Timestamp:   time.Now(),
+		Parents:     req.Parents,
+		Metadata:    req.Metadata,
 	}
 
 	op.ID = operations.NewOperationID([]byte(fmt.Sprintf("%s-%s-%d",
