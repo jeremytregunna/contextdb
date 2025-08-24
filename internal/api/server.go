@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
@@ -91,6 +92,9 @@ func (s *APIServer) setupRoutes() {
 
 	// Health check
 	s.mux.HandleFunc("GET /api/v1/health", s.healthCheck)
+
+	// Permalink endpoint
+	s.mux.HandleFunc("GET /api/v1/permalink/{operation_id}", s.resolvePermalink)
 }
 
 func (s *APIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1018,6 +1022,104 @@ func (s *APIServer) disableAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.jsonResponse(w, map[string]string{"message": "Authentication disabled"}, http.StatusOK)
+}
+
+// Permalink endpoint - resolves operation IDs to their context
+func (s *APIServer) resolvePermalink(w http.ResponseWriter, r *http.Request) {
+	operationID := r.PathValue("operation_id")
+	if operationID == "" {
+		s.jsonError(w, "Operation ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Get the operation
+	op, err := s.store.GetOperation(operations.OperationID(operationID))
+	if err != nil {
+		s.jsonError(w, "Operation not found", http.StatusNotFound)
+		return
+	}
+
+	// Build permalink response with operation details and context
+	permalinkData := struct {
+		OperationID  string                `json:"operation_id"`
+		Operation    *operations.Operation `json:"operation"`
+		DocumentPath string                `json:"document_path"`
+		LineNumber   string                `json:"line_number,omitempty"`
+		Column       string                `json:"column,omitempty"`
+		Context      map[string]string     `json:"context,omitempty"`
+		CreatedAt    string                `json:"created_at"`
+		Author       string                `json:"author"`
+		Permalink    bool                  `json:"is_permalink"`
+	}{
+		OperationID:  operationID,
+		Operation:    op,
+		DocumentPath: op.Metadata.Context["document_id"],
+		LineNumber:   op.Metadata.Context["line_number"],
+		Column:       op.Metadata.Context["column"],
+		Context:      op.Metadata.Context,
+		CreatedAt:    op.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+		Author:       string(op.Author),
+		Permalink:    op.Metadata.Context["permalink"] == "true",
+	}
+
+	// Return HTML response for browser viewing
+	if r.Header.Get("Accept") == "text/html" || r.Header.Get("Content-Type") == "text/html" {
+		s.renderPermalinkHTML(w, &permalinkData)
+		return
+	}
+
+	// Return JSON response for API clients
+	s.jsonResponse(w, permalinkData, http.StatusOK)
+}
+
+// Render HTML page for permalink viewing
+func (s *APIServer) renderPermalinkHTML(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "text/html")
+
+	htmlTemplate := `<!DOCTYPE html>
+<html>
+<head>
+    <title>ContextDB Permalink</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .metadata { background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 15px 0; }
+        .content { background: #fff; border: 1px solid #ddd; padding: 15px; border-radius: 5px; font-family: monospace; white-space: pre-wrap; }
+        .context { background: #e8f4fd; padding: 10px; border-radius: 5px; margin: 10px 0; }
+        h1 { color: #333; }
+        .meta-item { margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ContextDB Permalink</h1>
+        <div class="metadata">
+            <div class="meta-item"><strong>Operation ID:</strong> {{.OperationID}}</div>
+            <div class="meta-item"><strong>Author:</strong> {{.Author}}</div>
+            <div class="meta-item"><strong>Created:</strong> {{.CreatedAt}}</div>
+            <div class="meta-item"><strong>Document:</strong> {{.DocumentPath}}</div>
+            {{if .LineNumber}}<div class="meta-item"><strong>Line:</strong> {{.LineNumber}}</div>{{end}}
+            {{if .Column}}<div class="meta-item"><strong>Column:</strong> {{.Column}}</div>{{end}}
+        </div>
+        <div class="context">
+            <h3>Content</h3>
+            <div class="content">{{.Operation.Content}}</div>
+        </div>
+        <div class="context">
+            <h3>Context Information</h3>
+            {{range $key, $value := .Context}}
+            <div class="meta-item"><strong>{{$key}}:</strong> {{$value}}</div>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>`
+
+	tmpl := template.Must(template.New("permalink").Parse(htmlTemplate))
+	if err := tmpl.Execute(w, data); err != nil {
+		http.Error(w, "Template rendering error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // Helper method for basic intent analysis
