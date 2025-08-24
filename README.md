@@ -39,6 +39,10 @@ curl -X POST http://localhost:8080/api/v1/operations \
 - **[API Documentation](API.md)** - Complete REST API reference
 - **[Editor Integration Guide](docs/EDITOR_INTEGRATION.md)** - How to integrate ContextDB into editors and IDEs
 
+## IDEs with extensions available currently
+
+- **[contxtdb.nvim](https://github.com/jeremytregunna/contextdb.nvim)** - Neovim plugin that uses the REST API
+
 ## Examples
 
 Integration examples available in `examples/`:
